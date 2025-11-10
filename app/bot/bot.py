@@ -760,13 +760,7 @@ async def on_ready():
     if channel_alertes and not channel_alertes.last_message_id:
         embed = discord.Embed(
             title="🚨 Les sirènes hurlent !",
-            description=(
-                "Une nouvelle silhouette franchit les barricades...\n\n"
-                "Bienvenue survivant. Ici, chaque décision compte.\n\n"
-                "➡️ Lis les **⚖️ lois-du-camp** pour connaître nos règles.\n"
-                "➡️ Consulte le **📖 manuel-de-survie** pour apprendre à combattre l’infection.\n\n"
-                "🔥 Que la survie commence."
-            ),
+            description="...",
             color=discord.Color.red()
         )
         await channel_alertes.send(embed=embed)
@@ -776,45 +770,34 @@ async def on_ready():
     if channel_lois and not channel_lois.last_message_id:
         embed = discord.Embed(
             title="⚖️ Lois du Camp",
-            description=(
-                "📜 Respecte les survivants – aucune insulte, aucun abus.\n"
-                "🚫 Pas de spam, pas de pubs.\n"
-                "🛡️ Les Sentinelles veillent à l’ordre du camp.\n"
-                "🎮 Le fair play est obligatoire en Ranked.\n\n"
-                "*Ignorer ces lois, c’est rejoindre la Horde.*"
-            ),
+            description="...",
             color=discord.Color.dark_grey()
         )
         await channel_lois.send(embed=embed)
 
-        # 3) Manuel de survie — toujours à jour (créé ou édité)
+    # 3) Manuel de survie (message unique)
     channel_manuel = find_channel(guild, "manuel", "survie")
     if channel_manuel:
-        await ensure_or_update_message(channel_manuel, config_key="manual_message_id", embed=build_manual_embed())
+        await ensure_or_update_message(
+            channel_manuel,
+            config_key="manual_message_id",
+            embed=build_manual_embed()
+        )
 
     # 4) Dossier d’évaluation
     channel_rangs = find_channel(guild, "dossier", "evaluation")
     if channel_rangs and not channel_rangs.last_message_id:
         embed = discord.Embed(
             title="🎖️ Les Rangs du Ranked Infecté",
-            description="Voici ton chemin de survie... ou de damnation.",
+            description="...",
             color=discord.Color.gold()
         )
-        # (Texte conservé — note : la ligne "Apocalypse" ne correspond pas aux seuils codés, on laisse tel quel)
-        embed.add_field(name="🪦 Survivant (0–999 MMR)", value="*Derniers humains, fragiles mais encore debout.*", inline=False)
-        embed.add_field(name="🧟 Zombie (1000–1499 MMR)", value="*La chair à canon de l’essaim, affamés et sans répit.*", inline=False)
-        embed.add_field(name="🧌 Mutant (1500–1999 MMR)", value="*La chair se déforme, l’esprit s’éteint : un nouvel être naît.*", inline=False)
-        embed.add_field(name="💀 Apocalypse (2000–2499 MMR)", value="*Incarnation de la fin, porteur du désespoir et du chaos.*", inline=False)
-        embed.add_field(name="🔥 Alpha-Z (2500+ MMR)", value="*Alpha et Omega, porteur du fléau originel.*", inline=False)
         await channel_rangs.send(embed=embed)
 
-        # 5) Hall des Légendes (auto setup + auto-repair)
-# 5) Hall des Légendes (création si besoin + maj)
-await setup_or_update_hall(guild)
+    # 5) Hall des Légendes (création si besoin + maj)  ⬅️ la nouvelle fonction
+    await setup_or_update_hall(guild)
 
-        # ——————————————————————————————————————
-    # 🔥 Activation des messages RP automatiques
-    # ——————————————————————————————————————
+    # 🔥 Daemons RP (toujours DANS la fonction — indents identiques aux lignes ci-dessus)
     try:
         ensure_rp_daemons_started()
         log.info("📻 Daemons RP (feu de camp + radio) démarrés avec délais aléatoires.")
