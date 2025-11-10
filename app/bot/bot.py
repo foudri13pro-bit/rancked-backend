@@ -491,13 +491,11 @@ async def update_hall(guild: discord.Guild):
     except Exception as e:
         log.warning(f"[Hall] Erreur update: {e}")
 
-
 async def setup_or_update_hall(guild: discord.Guild):
     """
     1) Garantit qu'il existe UN message du Hall (créé si supprimé).
-    2) Confie ensuite à update_hall() la mise à jour du leaderboard dans CE message.
+    2) Met à jour ce message via update_hall().
     """
-    # Cherche le salon par ID connu ou par nom
     HALL_CHANNEL_ID = 1423665644519297034  # 👑・hall-des-légendes
     channel = guild.get_channel(HALL_CHANNEL_ID) or discord.utils.get(guild.text_channels, name="👑・hall-des-légendes")
 
@@ -505,7 +503,7 @@ async def setup_or_update_hall(guild: discord.Guild):
         log.warning("⚠️ Aucun salon '👑・hall-des-légendes' trouvé (ni ID ni nom).")
         return
 
-    # Placeholder propre (sera remplacé par update_hall)
+    # Placeholder minimal — sera remplacé par update_hall()
     placeholder = discord.Embed(
         title="🏛️ Hall des Légendes — Saison 1",
         description="*Chaque saison, les plus grands inscrivent leur nom dans ces murs.*",
@@ -513,12 +511,11 @@ async def setup_or_update_hall(guild: discord.Guild):
     )
     placeholder.add_field(name="En attente...", value="Le premier match n’a pas encore eu lieu.", inline=False)
 
-    # Garantit le message unique (créé si besoin, sinon édité)
+    # 1) S'assurer qu'un message unique existe (création si besoin)
     await ensure_or_update_message(channel, config_key="hall_message_id", embed=placeholder)
 
-    # Met à jour le contenu avec le vrai top (si joueurs)
+    # 2) Le remplir réellement
     await update_hall(guild)
-    
 
     # Récupérer le leaderboard
     with connect_db() as conn:
@@ -533,7 +530,7 @@ async def setup_or_update_hall(guild: discord.Guild):
         """, (cur_season,))
         rows = c.fetchall()
 
-    # Si pas de joueurs -> message par défaut
+        # Si pas de joueurs -> message par défaut
     if not rows:
         embed = discord.Embed(
             title=f"🏛️ Hall des Légendes — Saison {cur_season}",
@@ -546,16 +543,13 @@ async def setup_or_update_hall(guild: discord.Guild):
             description=f"⚔️ Saison {cur_season} — *Les noms gravés dans la pierre*",
             color=discord.Color.gold()
         )
-
         medals = ["👑", "🥈", "🥉"]
         for i, r in enumerate(rows, start=1):
             rank_label = get_rank(r["mmr"])
             prefix = medals[i-1] if i <= 3 else f"#{i}"
-
-            # Texte RP selon rang (conservé)
             if "Alpha-Z" in rank_label:
                 flair = "🔥 Porteur du fléau originel"
-            elif "Apocalypse" in rank_label:  # incohérence d’origine conservée volontairement
+            elif "Apocalypse" in rank_label:
                 flair = "💀 Incarnation du chaos"
             elif "Mutant" in rank_label:
                 flair = "🧌 Déformation de la chair"
@@ -576,16 +570,26 @@ async def setup_or_update_hall(guild: discord.Guild):
                     value=f"{rank_label} | {r['mmr']} MMR",
                     inline=False
                 )
-
         embed.set_footer(text="Les noms effacés disparaissent dans l’oubli...")
 
+    # Éditer le message existant, sinon recréer et save l’ID
     channel = discord.utils.get(guild.text_channels, name="👑・hall-des-légendes")
     if channel:
         try:
-            msg = await channel.fetch_message(int(hall_id))
+            msg_id = get_config("hall_message_id")
+            if not msg_id:
+                log.warning("[Erreur Hall] Aucun hall_message_id trouvé en config.")
+                return
+            msg = await channel.fetch_message(int(msg_id))
             await msg.edit(embed=embed)
+        except discord.NotFound:
+            new_msg = await channel.send(embed=embed)
+            set_config("hall_message_id", str(new_msg.id))
+            log.info(f"[Hall] Recréation du message (id={new_msg.id})")
         except Exception as e:
             log.warning(f"[Erreur Hall] Impossible de mettre à jour : {e}")
+    else:
+        log.warning("[Hall] Salon '👑・hall-des-légendes' introuvable.")
 
 async def finalize_match(
     interaction: discord.Interaction,
@@ -1703,32 +1707,26 @@ async def ensure_hall_message(guild: discord.Guild):
     """
     HALL_CHANNEL_ID = 1423665644519297034  # 👑・hall-des-légendes
 
-    # 1️⃣ Priorité : cherche par ID
-    channel = guild.get_channel(HALL_CHANNEL_ID)
-
-    # 2️⃣ Fallback : cherche par nom
+    # 1) Salon par ID ou par nom
+    channel = guild.get_channel(HALL_CHANNEL_ID) or discord.utils.get(guild.text_channels, name="👑・hall-des-légendes")
     if not channel:
-        channel = discord.utils.get(guild.text_channels, name="👑・hall-des-légendes")
-
-    if not channel:
-        print("⚠️ Aucun salon '👑・hall-des-légendes' trouvé (ni ID ni nom). Impossible de créer le Hall.")
+        log.warning("⚠️ Aucun salon '👑・hall-des-légendes' trouvé (ni ID ni nom). Impossible de créer le Hall.")
         return
 
-    hall_id = get_config("hall_message_id")
-
-    # Vérifie si le message configuré existe encore
+    # 2) On tente de retrouver le message configuré
     existing_msg = None
-    if hall_id:
+    msg_id = get_config("hall_message_id")
+    if msg_id:
         try:
-            existing_msg = await channel.fetch_message(int(hall_id))
+            existing_msg = await channel.fetch_message(int(msg_id))
         except discord.NotFound:
-            print("⚠️ Le message du Hall a été supprimé.")
+            existing_msg = None  # supprimé
         except Exception as e:
-            print(f"[Erreur Hall] Impossible de récupérer le message existant : {e}")
+            log.warning(f"[Erreur Hall] Impossible de récupérer le message existant : {e}")
 
-    # Si aucun message valide, recrée un Hall neuf
+    # 3) Si aucun message valide, on recrée un placeholder et on sauvegarde son ID
     if not existing_msg:
-        print("🛠️ Création automatique d’un nouveau Hall des Légendes...")
+        log.info("🛠️ Création automatique d’un nouveau Hall des Légendes...")
         embed = discord.Embed(
             title="🏛️ Hall des Légendes — Saison 1",
             description="*Chaque saison, les plus grands inscrivent leur nom dans ces murs.*",
@@ -1737,9 +1735,9 @@ async def ensure_hall_message(guild: discord.Guild):
         embed.add_field(name="En attente...", value="Le premier match n’a pas encore eu lieu.", inline=False)
         msg = await channel.send(embed=embed)
         set_config("hall_message_id", str(msg.id))
-        print(f"✅ Nouveau Hall créé automatiquement (msg ID {msg.id})")
+        log.info(f"✅ Nouveau Hall créé automatiquement (msg ID {msg.id})")
     else:
-        print("✅ Hall des Légendes déjà en place, aucune recréation nécessaire.")
+        log.info("✅ Hall des Légendes déjà en place, aucune recréation nécessaire.")
 
 # =========================
 #   MESSAGES RP AUTOMATIQUES (JITTER + COOLDOWN PERSISTANT)
