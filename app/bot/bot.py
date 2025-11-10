@@ -123,8 +123,6 @@ MAPS: Dict[str, str] = {
     # Small — maps compactes (idéales < 10 joueurs)
     "ByteVault": "small",
     "Vertigo": "small",
-    "Volcano": "small",
-    "Kermor": "small",
     "Museum": "small",
     "Dome": "small",
     "EgoutZ": "small",
