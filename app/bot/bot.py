@@ -403,10 +403,94 @@ async def send_rank_alert(guild: discord.Guild, minecraft_name: str, new_rank_la
     log.info(f"[RANK-UP] {minecraft_name} -> {new_rank_label}")
 
 async def update_hall(guild: discord.Guild):
-    """Mise à jour du Hall des Légendes (logique conservée)."""
-    hall_id = get_config("hall_message_id")
-    if not hall_id:
-        return  # pas encore configuré
+    """Met à jour le message du Hall des Légendes en utilisant l'ID stocké en config."""
+    msg_id = get_config("hall_message_id")
+    if not msg_id:
+        log.warning("[Hall] Aucun hall_message_id en config – rien à mettre à jour.")
+        return
+
+    try:
+        msg_id_int = int(msg_id)
+    except ValueError:
+        log.warning(f"[Hall] hall_message_id invalide: {msg_id!r}")
+        return
+
+    # Récupère la saison courante + top 10
+    with connect_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT MAX(season_id) FROM players")
+        cur_season = c.fetchone()[0] or 1
+        c.execute("""
+            SELECT minecraft_name, mmr FROM players
+            WHERE season_id = ?
+            ORDER BY mmr DESC
+            LIMIT 10
+        """, (cur_season,))
+        rows = c.fetchall()
+
+    # Construit l'embed
+    if not rows:
+        embed = discord.Embed(
+            title=f"🏛️ Hall des Légendes — Saison {cur_season}",
+            description="*Aucun nom n’a encore été gravé dans la pierre...*",
+            color=discord.Color.dark_grey()
+        )
+    else:
+        embed = discord.Embed(
+            title=f"━━━━━━━━━ 🏛️ HALL DES LÉGENDES ━━━━━━━━━",
+            description=f"⚔️ Saison {cur_season} — *Les noms gravés dans la pierre*",
+            color=discord.Color.gold()
+        )
+        medals = ["👑", "🥈", "🥉"]
+        for i, r in enumerate(rows, start=1):
+            rank_label = get_rank(r["mmr"])
+            prefix = medals[i-1] if i <= 3 else f"#{i}"
+
+            if "Alpha-Z" in rank_label:
+                flair = "🔥 Porteur du fléau originel"
+            elif "Apocalypse" in rank_label:
+                flair = "💀 Incarnation du chaos"
+            elif "Mutant" in rank_label:
+                flair = "🧌 Déformation de la chair"
+            elif "Zombie" in rank_label:
+                flair = "🧟 Chair affamée"
+            else:
+                flair = "🌿 Survivant fragile"
+
+            if i <= 3:
+                embed.add_field(
+                    name=f"{prefix} {r['minecraft_name']} — {rank_label}",
+                    value=f"{flair}\n🏆 {r['mmr']} MMR",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name=f"{prefix} {r['minecraft_name']}",
+                    value=f"{rank_label} | {r['mmr']} MMR",
+                    inline=False
+                )
+        embed.set_footer(text="Les noms effacés disparaissent dans l’oubli...")
+
+    # Trouve le salon
+    HALL_CHANNEL_ID = 1423665644519297034  # adapte si besoin
+    channel = guild.get_channel(HALL_CHANNEL_ID) or discord.utils.get(guild.text_channels, name="👑・hall-des-légendes")
+    if not channel:
+        log.warning("[Hall] Salon '👑・hall-des-légendes' introuvable.")
+        return
+
+    # Édite le message, ou recrée si supprimé
+    try:
+        msg = await channel.fetch_message(msg_id_int)
+        await msg.edit(embed=embed)
+    except discord.NotFound:
+        log.warning("[Hall] Message du Hall introuvable – recréation + mise à jour de l’ID.")
+        new_msg = await channel.send(embed=embed)
+        set_config("hall_message_id", str(new_msg.id))
+    except discord.Forbidden:
+        log.warning("[Hall] Permission insuffisante (il faut 'Lire l’historique des messages').")
+    except Exception as e:
+        log.warning(f"[Hall] Erreur update: {e}")
+
 
 async def setup_or_update_hall(guild: discord.Guild):
     """
