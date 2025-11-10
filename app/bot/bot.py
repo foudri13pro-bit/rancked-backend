@@ -913,7 +913,7 @@ async def on_ready():
         await ensure_or_update_message(
             channel_manuel,
             config_key="manual_message_id",
-            embed=build_manual_embed()
+            embed=build_manual_embed(),
             signature="ZENAVIA_AUTGEN_MANUAL"
         )
     # Hall
