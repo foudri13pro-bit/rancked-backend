@@ -408,6 +408,34 @@ async def update_hall(guild: discord.Guild):
     if not hall_id:
         return  # pas encore configuré
 
+async def setup_or_update_hall(guild: discord.Guild):
+    """
+    1) Garantit qu'il existe UN message du Hall (créé si supprimé).
+    2) Confie ensuite à update_hall() la mise à jour du leaderboard dans CE message.
+    """
+    # Cherche le salon par ID connu ou par nom
+    HALL_CHANNEL_ID = 1423665644519297034  # 👑・hall-des-légendes
+    channel = guild.get_channel(HALL_CHANNEL_ID) or discord.utils.get(guild.text_channels, name="👑・hall-des-légendes")
+
+    if not channel:
+        log.warning("⚠️ Aucun salon '👑・hall-des-légendes' trouvé (ni ID ni nom).")
+        return
+
+    # Placeholder propre (sera remplacé par update_hall)
+    placeholder = discord.Embed(
+        title="🏛️ Hall des Légendes — Saison 1",
+        description="*Chaque saison, les plus grands inscrivent leur nom dans ces murs.*",
+        color=discord.Color.gold()
+    )
+    placeholder.add_field(name="En attente...", value="Le premier match n’a pas encore eu lieu.", inline=False)
+
+    # Garantit le message unique (créé si besoin, sinon édité)
+    await ensure_or_update_message(channel, config_key="hall_message_id", embed=placeholder)
+
+    # Met à jour le contenu avec le vrai top (si joueurs)
+    await update_hall(guild)
+    
+
     # Récupérer le leaderboard
     with connect_db() as conn:
         c = conn.cursor()
@@ -638,11 +666,13 @@ def find_channel(guild: discord.Guild, *fragments: str) -> Optional[discord.Text
 # --- Helpers pour créer/mettre à jour un message "statique" dans un salon
 async def ensure_or_update_message(channel: discord.TextChannel, *, config_key: str, embed: discord.Embed):
     """
-    Édite le message mémorisé dans bot_config[config_key] s'il existe,
-    sinon envoie un nouveau message et stocke son id.
+    Édite le message mémorisé dans bot_config[config_key] s'il existe.
+    Si le fetch échoue par NotFound -> on recrée.
+    Si le fetch échoue par Forbidden/permissions -> on NE recrée PAS (pour éviter le spam).
     """
     if channel is None:
         return
+
     msg_id = get_config(config_key)
     if msg_id:
         try:
@@ -650,13 +680,26 @@ async def ensure_or_update_message(channel: discord.TextChannel, *, config_key: 
             await msg.edit(embed=embed)
             return
         except discord.NotFound:
-            pass  # message supprimé → on va en recréer un
+            # le message n'existe plus -> on peut recréer proprement
+            pass
+        except discord.Forbidden:
+            log.warning(f"[ensure_or_update_message] Accès refusé pour fetch le message {msg_id} dans #{channel.name}. "
+                        f"Vérifie 'Lire l’historique des messages'. Pas de recréation pour éviter le spam.")
+            return
         except Exception as e:
-            log.warning(f"[ensure_or_update_message] impossible de récupérer/éditer: {e}")
+            log.warning(f"[ensure_or_update_message] Erreur fetch/éditer msg {msg_id}: {e}. "
+                        f"Pas de recréation automatique pour éviter le spam.")
+            return
 
-    # Créer un nouveau message et mémoriser l'id
-    sent = await channel.send(embed=embed)
-    set_config(config_key, str(sent.id))
+    # Créer un nouveau message uniquement si on est sûr que l’ancien n’existe plus
+    try:
+        sent = await channel.send(embed=embed)
+        set_config(config_key, str(sent.id))
+        log.info(f"[ensure_or_update_message] Nouveau message créé (id={sent.id}) dans #{channel.name}")
+    except discord.Forbidden:
+        log.error(f"[ensure_or_update_message] Forbidden pour envoyer dans #{channel.name}. Vérifie les permissions.")
+    except Exception as e:
+        log.error(f"[ensure_or_update_message] Impossible d'envoyer le message dans #{channel.name}: {e}")
 
 def build_manual_embed() -> discord.Embed:
     # >>> METS ICI LA VERSION QUE TU VEUX AFFICHER <<<
@@ -766,34 +809,9 @@ async def on_ready():
         await channel_rangs.send(embed=embed)
 
         # 5) Hall des Légendes (auto setup + auto-repair)
-    HALL_CHANNEL_ID = 1423665644519297034  # 👑・hall-des-légendes
-    channel_hall = guild.get_channel(HALL_CHANNEL_ID) or discord.utils.get(guild.text_channels, name="👑・hall-des-légendes")
+# 5) Hall des Légendes (création si besoin + maj)
+await setup_or_update_hall(guild)
 
-    if channel_hall:
-        hall_id = get_config("hall_message_id")
-        existing_msg = None
-
-        if hall_id:
-            try:
-                existing_msg = await channel_hall.fetch_message(int(hall_id))
-                log.info(f"✅ Hall déjà en place (msg ID {hall_id})")
-            except discord.NotFound:
-                log.warning("⚠️ Le message du Hall a été supprimé, recréation en cours...")
-            except Exception as e:
-                log.error(f"[Erreur Hall] Impossible de récupérer le message existant : {e}")
-
-        if not existing_msg:
-            embed = discord.Embed(
-                title="🏛️ Hall des Légendes — Saison 1",
-                description="*Chaque saison, les plus grands inscrivent leur nom dans ces murs.*",
-                color=discord.Color.gold()
-            )
-            embed.add_field(name="En attente...", value="Le premier match n’a pas encore eu lieu.", inline=False)
-            msg = await channel_hall.send(embed=embed)
-            set_config("hall_message_id", str(msg.id))
-            log.info(f"✅ Nouveau Hall créé automatiquement (msg ID {msg.id})")
-    else:
-        log.warning("⚠️ Aucun salon '👑・hall-des-légendes' trouvé (ni ID ni nom). Impossible de créer le Hall.")
         # ——————————————————————————————————————
     # 🔥 Activation des messages RP automatiques
     # ——————————————————————————————————————
