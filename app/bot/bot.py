@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple
 import discord
 from discord import app_commands
 from discord.ext import commands
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 
 # =========================
 #          LOGGING
@@ -313,6 +313,25 @@ def get_config(key: str) -> Optional[str]:
         c.execute("SELECT value FROM bot_config WHERE key = ?", (key,))
         row = c.fetchone()
         return row[0] if row else None
+    
+# =========================
+#    CONFIG .ENV PERSISTANTE (Render)
+# =========================
+def set_env_value(key: str, value: str):
+    """
+    Met à jour la valeur d'une clé dans le fichier .env (persiste sur Render si monté).
+    On synchronise aussi os.environ pour que le process y ait accès immédiatement.
+    """
+    try:
+        os.environ[key] = value
+        set_key(".env", key, value)
+        log.info(f"[.env] {key} mis à jour -> {value}")
+    except Exception as e:
+        log.warning(f"[.env] Impossible de mettre à jour {key}: {e}")
+
+def get_env_value(key: str) -> Optional[str]:
+    """Lit une valeur depuis les variables d'environnement / .env."""
+    return os.getenv(key)
 
 # =========================
 #        LOGIQUE MMR
@@ -486,6 +505,7 @@ async def update_hall(guild: discord.Guild):
         log.warning("[Hall] Message du Hall introuvable – recréation + mise à jour de l’ID.")
         new_msg = await channel.send(embed=embed)
         set_config("hall_message_id", str(new_msg.id))
+        set_env_value("HALL_MESSAGE_ID", str(new_msg.id))
     except discord.Forbidden:
         log.warning("[Hall] Permission insuffisante (il faut 'Lire l’historique des messages').")
     except Exception as e:
@@ -585,6 +605,7 @@ async def setup_or_update_hall(guild: discord.Guild):
         except discord.NotFound:
             new_msg = await channel.send(embed=embed)
             set_config("hall_message_id", str(new_msg.id))
+            set_env_value("HALL_MESSAGE_ID", str(new_msg.id))
             log.info(f"[Hall] Recréation du message (id={new_msg.id})")
         except Exception as e:
             log.warning(f"[Erreur Hall] Impossible de mettre à jour : {e}")
@@ -754,36 +775,44 @@ def find_channel(guild: discord.Guild, *fragments: str) -> Optional[discord.Text
 # --- Helpers pour créer/mettre à jour un message "statique" dans un salon
 async def ensure_or_update_message(channel: discord.TextChannel, *, config_key: str, embed: discord.Embed):
     """
-    Édite le message mémorisé dans bot_config[config_key] s'il existe.
-    Si le fetch échoue par NotFound -> on recrée.
-    Si le fetch échoue par Forbidden/permissions -> on NE recrée PAS (pour éviter le spam).
+    Édite le message mémorisé (bot_config[config_key]) s'il existe.
+    Si la DB a reset, on restaure depuis .env (config_key uppercased).
+    Sinon, on crée un nouveau message et on enregistre l'ID à la fois en DB et dans .env.
     """
     if channel is None:
         return
 
+    env_key = config_key.upper()
+
+    # 0) Tentative de restauration depuis .env si la DB est vide
     msg_id = get_config(config_key)
+    if not msg_id:
+        msg_id_env = get_env_value(env_key)
+        if msg_id_env:
+            set_config(config_key, msg_id_env)
+            msg_id = msg_id_env
+            log.info(f"[ensure_or_update_message] Restauration depuis .env: {env_key}={msg_id_env}")
+
+    # 1) Essayer d'éditer l’ID connu
     if msg_id:
         try:
             msg = await channel.fetch_message(int(msg_id))
             await msg.edit(embed=embed)
             return
         except discord.NotFound:
-            # le message n'existe plus -> on peut recréer proprement
-            pass
+            log.info(f"[ensure_or_update_message] Message {msg_id} introuvable → on va recréer.")
         except discord.Forbidden:
-            log.warning(f"[ensure_or_update_message] Accès refusé pour fetch le message {msg_id} dans #{channel.name}. "
-                        f"Vérifie 'Lire l’historique des messages'. Pas de recréation pour éviter le spam.")
+            log.warning(f"[ensure_or_update_message] Forbidden sur #{channel.name} (pas d'édition).")
             return
         except Exception as e:
-            log.warning(f"[ensure_or_update_message] Erreur fetch/éditer msg {msg_id}: {e}. "
-                        f"Pas de recréation automatique pour éviter le spam.")
-            return
+            log.warning(f"[ensure_or_update_message] Erreur fetch/éditer msg {msg_id}: {e}. On va recréer proprement.")
 
-    # Créer un nouveau message uniquement si on est sûr que l’ancien n’existe plus
+    # 2) Créer proprement (dernier recours)
     try:
         sent = await channel.send(embed=embed)
         set_config(config_key, str(sent.id))
-        log.info(f"[ensure_or_update_message] Nouveau message créé (id={sent.id}) dans #{channel.name}")
+        set_env_value(env_key, str(sent.id))  # ⬅️ persiste aussi dans .env
+        log.info(f"[ensure_or_update_message] ✅ Nouveau message créé (id={sent.id}) dans #{channel.name}")
     except discord.Forbidden:
         log.error(f"[ensure_or_update_message] Forbidden pour envoyer dans #{channel.name}. Vérifie les permissions.")
     except Exception as e:
@@ -1209,9 +1238,6 @@ async def sync(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Erreur lors de la synchro : {e}", ephemeral=True)
 
 # ---------- Fin de match (flow complet) ----------
-
-# ========= BLOC UNIQUE DE REMPLACEMENT : Stats + /matchend =========
-import asyncio
 
 # --- Accusé de réception safe (évite "Échec de l'interaction")
 async def safe_ack(interaction: discord.Interaction, *, ephemeral: bool = True):
