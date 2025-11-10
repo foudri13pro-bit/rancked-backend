@@ -771,50 +771,55 @@ def find_channel(guild: discord.Guild, *fragments: str) -> Optional[discord.Text
     return None
 
 # --- Helpers pour créer/mettre à jour un message "statique" dans un salon
-async def ensure_or_update_message(channel: discord.TextChannel, *, config_key: str, embed: discord.Embed):
+async def ensure_or_update_message(
+    channel: discord.TextChannel,
+    *,
+    config_key: str,          # on le garde mais il n'est plus nécessaire côté “gratuit”
+    embed: discord.Embed,
+    signature: str = "ZENAVIA_AUTOGEN"  # ajoute un suffixe spécifique par type
+):
     """
-    Édite le message mémorisé (bot_config[config_key]) s'il existe.
-    Si la DB a reset, on restaure depuis .env (config_key uppercased).
-    Sinon, on crée un nouveau message et on enregistre l'ID à la fois en DB et dans .env.
+    Version 'stateless' pour Render Free :
+    1) scanne l'historique récent pour trouver le dernier message du bot contenant la signature
+    2) si trouvé -> edit
+    3) sinon -> send un nouveau message (et, optionnel, supprime les anciens signés)
     """
     if channel is None:
         return
 
-    env_key = config_key.upper()
+    # 1) Chercher un message existant signé
+    found: discord.Message | None = None
+    try:
+        async for m in channel.history(limit=50):
+            if m.author == channel.guild.me and (signature in (m.content or "")):
+                found = m
+                break
+    except discord.Forbidden:
+        log.warning(f"[ensure_or_update_message] Forbidden: besoin de 'Lire l’historique' sur #{channel.name}")
+        return
+    except Exception as e:
+        log.warning(f"[ensure_or_update_message] Erreur history sur #{channel.name}: {e}")
 
-    # 0) Tentative de restauration depuis .env si la DB est vide
-    msg_id = get_config(config_key)
-    if not msg_id:
-        msg_id_env = get_env_value(env_key)
-        if msg_id_env:
-            set_config(config_key, msg_id_env)
-            msg_id = msg_id_env
-            log.info(f"[ensure_or_update_message] Restauration depuis .env: {env_key}={msg_id_env}")
-
-    # 1) Essayer d'éditer l’ID connu
-    if msg_id:
+    # 2) Edit si trouvé
+    if found:
         try:
-            msg = await channel.fetch_message(int(msg_id))
-            await msg.edit(embed=embed)
+            await found.edit(content=f"||{signature}||", embed=embed)
+            log.info(f"[ensure_or_update_message] ✏️ Edit du message signé dans #{channel.name}")
             return
-        except discord.NotFound:
-            log.info(f"[ensure_or_update_message] Message {msg_id} introuvable → on va recréer.")
         except discord.Forbidden:
-            log.warning(f"[ensure_or_update_message] Forbidden sur #{channel.name} (pas d'édition).")
+            log.warning(f"[ensure_or_update_message] Forbidden: pas d'édition possible dans #{channel.name}")
             return
         except Exception as e:
-            log.warning(f"[ensure_or_update_message] Erreur fetch/éditer msg {msg_id}: {e}. On va recréer proprement.")
+            log.warning(f"[ensure_or_update_message] Erreur d'édition: {e} -> tentative de recréation")
 
-    # 2) Créer proprement (dernier recours)
+    # 3) Sinon, créer un nouveau message (avec la signature)
     try:
-        sent = await channel.send(embed=embed)
-        set_config(config_key, str(sent.id))
-        set_env_value(env_key, str(sent.id))  # ⬅️ persiste aussi dans .env
-        log.info(f"[ensure_or_update_message] ✅ Nouveau message créé (id={sent.id}) dans #{channel.name}")
+        await channel.send(content=f"||{signature}||", embed=embed)
+        log.info(f"[ensure_or_update_message] ✅ Nouveau message signé créé dans #{channel.name}")
     except discord.Forbidden:
-        log.error(f"[ensure_or_update_message] Forbidden pour envoyer dans #{channel.name}. Vérifie les permissions.")
+        log.error(f"[ensure_or_update_message] Forbidden pour envoyer dans #{channel.name}")
     except Exception as e:
-        log.error(f"[ensure_or_update_message] Impossible d'envoyer le message dans #{channel.name}: {e}")
+        log.error(f"[ensure_or_update_message] Échec d’envoi dans #{channel.name}: {e}")
 
 def build_manual_embed() -> discord.Embed:
     # >>> METS ICI LA VERSION QUE TU VEUX AFFICHER <<<
@@ -909,8 +914,16 @@ async def on_ready():
             channel_manuel,
             config_key="manual_message_id",
             embed=build_manual_embed()
+            signature="ZENAVIA_AUTGEN_MANUAL"
         )
-
+    # Hall
+    await ensure_or_update_message(
+        channel_hall,
+        config_key="hall_message_id",
+        embed=embed_hall_placeholder,
+        signature="ZENAVIA_AUTOGEN_HALL"
+    )
+    
     # 4) Dossier d’évaluation — présentation des rangs
     channel_rangs = find_channel(guild, "dossier", "evaluation")
     if channel_rangs and not channel_rangs.last_message_id:
