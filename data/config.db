@@ -1,0 +1,15 @@
+from pathlib import Path
+import sqlite3
+
+DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "config.db"
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """)
+        conn.commit()
