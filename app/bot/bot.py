@@ -29,8 +29,12 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-
 DB_PATH = "infected_ranked.db"
+
+# Intents Discord
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
 
 # —— Rangs par MMR (⚠️ logique conservée telle quelle)
 RANKS: List[Tuple[int, str]] = [
