@@ -827,9 +827,9 @@ async def on_ready():
     for ch in guild.text_channels:
         log.info(f"- {ch.name}")
 
-    # 1) Sirène d’alertes
+    # 1) Sirène d’alertes — message unique
     channel_alertes = find_channel(guild, "sirene", "alertes")
-    if channel_alertes and not channel_alertes.last_message_id:
+    if channel_alertes:
         embed = discord.Embed(
             title="🚨 Les sirènes hurlent !",
             description=(
@@ -841,11 +841,14 @@ async def on_ready():
             ),
             color=discord.Color.red()
         )
-        await channel_alertes.send(embed=embed)
+        await ensure_or_update_message(
+            channel_alertes,
+            embed=embed,
+        )
 
-    # 2) Lois du camp
+    # 2) Lois du camp — message unique
     channel_lois = find_channel(guild, "lois-du-camp", "lois")
-    if channel_lois and not channel_lois.last_message_id:
+    if channel_lois:
         embed = discord.Embed(
             title="⚖️ Lois du Camp",
             description=(
@@ -857,7 +860,10 @@ async def on_ready():
             ),
             color=discord.Color.dark_grey()
         )
-        await channel_lois.send(embed=embed)
+        await ensure_or_update_message(
+            channel_lois,
+            embed=embed,
+        )
 
     # 3) Manuel de survie — message unique (auto update)
     channel_manuel = find_channel(guild, "manuel", "survie")
