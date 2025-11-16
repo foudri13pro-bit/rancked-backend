@@ -5,6 +5,12 @@
 # .env:
 # DISCORD_TOKEN=xxxxx
 
+import psycopg2
+from psycopg2.extras import DictCursor
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+
 from __future__ import annotations
 
 import logging
@@ -159,18 +165,21 @@ MAPS: Dict[str, str] = {
 }
 
 # =========================
-#       DB UTILITAIRES
+#       DB UTILITAIRES (Postgres / Neon)
 # =========================
 
-def connect_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+def connect_db():
+    """
+    Connexion à la base Neon (Postgres) via DATABASE_URL.
+    ⚠️ Nécessite que la variable d'env DATABASE_URL soit définie.
+    """
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL n'est pas défini (URL Neon).")
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=DictCursor)
     return conn
 
 def init_db() -> None:
-    """Crée les tables si absentes et ajoute les colonnes utilisées par le code.
-    ⚠️ Non destructif et idempotent.
-    """
+    """Crée les tables si absentes (version Postgres, idempotent)."""
     with connect_db() as conn:
         c = conn.cursor()
 
@@ -198,7 +207,7 @@ def init_db() -> None:
         # matches
         c.execute("""
         CREATE TABLE IF NOT EXISTS matches (
-            match_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_id SERIAL PRIMARY KEY,
             date TEXT NOT NULL,
             winner TEXT NOT NULL
         )
@@ -207,7 +216,7 @@ def init_db() -> None:
         # match_players
         c.execute("""
         CREATE TABLE IF NOT EXISTS match_players (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             match_id INTEGER,
             discord_id TEXT,
             role TEXT,
@@ -228,23 +237,20 @@ def init_db() -> None:
         )
         """)
 
-        # Colonnes legacy ajoutées a posteriori si manquantes
-        c.execute("PRAGMA table_info(players)")
-        cols = {row[1] for row in c.fetchall()}
-        if "last_change" not in cols:
-            c.execute("ALTER TABLE players ADD COLUMN last_change INTEGER DEFAULT 0")
-        if "season_id" not in cols:
-            c.execute("ALTER TABLE players ADD COLUMN season_id INTEGER DEFAULT 1")
-        if "active_ranked" not in cols:
-            c.execute("ALTER TABLE players ADD COLUMN active_ranked INTEGER DEFAULT 1")
+        # Colonnes "au cas où" (Postgres : IF NOT EXISTS)
+        c.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS last_change INTEGER DEFAULT 0")
+        c.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS season_id INTEGER DEFAULT 1")
+        c.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS active_ranked INTEGER DEFAULT 1")
 
-def fetch_player(discord_id: int) -> Optional[sqlite3.Row]:
+        conn.commit()
+
+def fetch_player(discord_id: int) -> Optional[dict]:
     with connect_db() as conn:
         c = conn.cursor()
         c.execute("""
             SELECT minecraft_name, mmr, last_change, wins_humain, wins_zombie, losses,
                    kills_zombie, kills_humain, assists, dmg_dealt, season_id
-            FROM players WHERE discord_id = ?
+            FROM players WHERE discord_id = %s
         """, (str(discord_id),))
         return c.fetchone()
 
@@ -254,11 +260,13 @@ def upsert_player(discord_id: int, minecraft_name: str) -> Tuple[bool, str]:
         with connect_db() as conn:
             c = conn.cursor()
             c.execute(
-                "INSERT INTO players (discord_id, minecraft_name) VALUES (?, ?)",
+                "INSERT INTO players (discord_id, minecraft_name) VALUES (%s, %s)",
                 (str(discord_id), minecraft_name)
             )
+            conn.commit()
             return True, "créé"
-    except sqlite3.IntegrityError:
+    except Exception:
+        # Contrainte PRIMARY KEY violée => déjà existant
         return False, "existe"
 
 def update_player(
@@ -276,16 +284,16 @@ def update_player(
 ) -> None:
     c.execute("""
         UPDATE players
-        SET mmr = mmr + ?,
-            last_change = ?,
-            wins_humain = wins_humain + ?,
-            wins_zombie = wins_zombie + ?,
-            losses = losses + ?,
-            kills_zombie = kills_zombie + ?,
-            kills_humain = kills_humain + ?,
-            assists = assists + ?,
-            dmg_dealt = dmg_dealt + ?
-        WHERE discord_id = ?
+        SET mmr = mmr + %s,
+            last_change = %s,
+            wins_humain = wins_humain + %s,
+            wins_zombie = wins_zombie + %s,
+            losses = losses + %s,
+            kills_zombie = kills_zombie + %s,
+            kills_humain = kills_humain + %s,
+            assists = assists + %s,
+            dmg_dealt = dmg_dealt + %s
+        WHERE discord_id = %s
     """, (mmr_change, mmr_change, wins_h, wins_z, losses, kills_z, kills_h, assists, dmg, str(discord_id)))
 
 def current_season() -> int:
@@ -301,15 +309,16 @@ def set_config(key: str, value: str):
     with connect_db() as conn:
         c = conn.cursor()
         c.execute(
-            "INSERT INTO bot_config (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO bot_config (key, value) VALUES (%s, %s) "
+            "ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value",
             (key, value)
         )
+        conn.commit()
 
 def get_config(key: str) -> Optional[str]:
     with connect_db() as conn:
         c = conn.cursor()
-        c.execute("SELECT value FROM bot_config WHERE key = ?", (key,))
+        c.execute("SELECT value FROM bot_config WHERE key = %s", (key,))
         row = c.fetchone()
         return row[0] if row else None
     
@@ -479,7 +488,7 @@ async def update_hall(guild: discord.Guild):
         cur_season = c.fetchone()[0] or 1
         c.execute("""
             SELECT minecraft_name, mmr FROM players
-            WHERE season_id = ?
+            WHERE season_id = %s
             ORDER BY mmr DESC
             LIMIT 10
         """, (cur_season,))
@@ -558,8 +567,14 @@ async def finalize_match(
         name_to_data = {name: (did, active, mmr) for (did, name, active, mmr) in c.fetchall()}
 
         # Créer le match
-        c.execute("INSERT INTO matches (date, winner) VALUES (?, ?)", (datetime.now(timezone.utc).isoformat(), winner))
-        match_id = c.lastrowid
+        c.execute(
+            "INSERT INTO matches (date, winner) VALUES (%s, %s)",
+            (datetime.now(timezone.utc).isoformat(), winner)
+            )
+        match_id = c.lastrowid if hasattr(C, "lastrowid") else None
+        if match_id is None:
+            c.execute("SELECT MAX(match_id) AS mid FROM matches")
+            match_id = c.fetchone()["mid#]"]")
 
         lines = []
         for name in players:
@@ -612,7 +627,7 @@ async def finalize_match(
             )
             c.execute("""
                 INSERT INTO match_players (match_id, discord_id, role, kills, dmg, mmr_change, survivor)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (match_id, str(discord_id), role, k, d, change, 1 if is_survivor else 0))
 
             role_icon = "🏹" if role == "humain" else "🧟" if role == "infected" else "🦠"
@@ -841,10 +856,7 @@ async def on_ready():
             ),
             color=discord.Color.red()
         )
-        await ensure_or_update_message(
-            channel_alertes,
-            embed=embed,
-        )
+        await ensure_or_update_message(channel_alertes, embed=embed)
 
     # 2) Lois du camp — message unique
     channel_lois = find_channel(guild, "lois-du-camp", "lois")
@@ -860,12 +872,9 @@ async def on_ready():
             ),
             color=discord.Color.dark_grey()
         )
-        await ensure_or_update_message(
-            channel_lois,
-            embed=embed,
-        )
+        await ensure_or_update_message(channel_lois, embed=embed)
 
-    # 3) Manuel de survie — message unique (auto update)
+    # 3) Manuel de survie — message unique
     channel_manuel = find_channel(guild, "manuel", "survie")
     if channel_manuel:
         await ensure_or_update_message(
@@ -956,7 +965,7 @@ async def history(interaction: discord.Interaction, member: Optional[discord.Mem
             SELECT m.date, m.winner, mp.role, mp.kills, mp.dmg, mp.mmr_change, mp.survivor
             FROM match_players mp
             JOIN matches m ON mp.match_id = m.match_id
-            WHERE mp.discord_id = ?
+            WHERE mp.discord_id = %s
             ORDER BY m.date DESC
             LIMIT 5
         """, (str(user.id),))
@@ -1008,7 +1017,7 @@ async def leaderboard(interaction: discord.Interaction):
         cur_season = c.fetchone()[0] or 1
         c.execute("""
             SELECT minecraft_name, mmr FROM players
-            WHERE season_id = ?
+            WHERE season_id = %s
             ORDER BY mmr DESC
             LIMIT 10
         """, (cur_season,))
@@ -1049,7 +1058,7 @@ async def card(interaction: discord.Interaction, member: Optional[discord.Member
     # Vérifie si joueur est Top 1 de sa saison
     with connect_db() as conn:
         c = conn.cursor()
-        c.execute("SELECT minecraft_name FROM players WHERE season_id = ? ORDER BY mmr DESC LIMIT 1", (row["season_id"],))
+        c.execute("SELECT minecraft_name FROM players WHERE season_id = %s ORDER BY mmr DESC LIMIT 1", (row["season_id"],))
         row_top = c.fetchone()
     crown = " 👑 Patient Zero" if row_top and row_top[0] == row["minecraft_name"] else ""
 
@@ -1121,7 +1130,7 @@ async def card(interaction: discord.Interaction, member: Optional[discord.Member
 async def unlink(interaction: discord.Interaction, member: discord.Member):
     with connect_db() as conn:
         c = conn.cursor()
-        c.execute("DELETE FROM players WHERE discord_id = ?", (str(member.id),))
+        c.execute("DELETE FROM players WHERE discord_id = %s", (str(member.id),))
     await interaction.response.send_message(
         f"🔓 {member.mention} a été délié. Il peut refaire `/register`.",
         ephemeral=True
@@ -1148,7 +1157,7 @@ async def resetseason(interaction: discord.Interaction):
                 dmg_dealt = 0,
                 survival_time_best = 0,
                 survival_time_avg = 0,
-                season_id = ?
+                season_id = %s
         """, (new_season,))
     await interaction.response.send_message(
         f"🆕 La saison {new_season} commence ! Tous les joueurs ont été reset à 1000 MMR.",
@@ -1162,7 +1171,7 @@ async def ranked_on(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     with connect_db() as conn:
         c = conn.cursor()
-        c.execute("UPDATE players SET active_ranked = 1 WHERE discord_id = ?", (str(interaction.user.id),))
+        c.execute("UPDATE players SET active_ranked = 1 WHERE discord_id = %s", (str(interaction.user.id),))
     await interaction.followup.send("✅ Ton mode **Ranked** est maintenant **activé** !", ephemeral=True)
 
 @bot.tree.command(name="ranked_off", description="Désactiver le Ranked (jouer chill, parties ignorées)")
@@ -1170,7 +1179,7 @@ async def ranked_off(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     with connect_db() as conn:
         c = conn.cursor()
-        c.execute("UPDATE players SET active_ranked = 0 WHERE discord_id = ?", (str(interaction.user.id),))
+        c.execute("UPDATE players SET active_ranked = 0 WHERE discord_id = %s", (str(interaction.user.id),))
     await interaction.followup.send("⏸️ Tu es maintenant en mode **chill** : tes parties ne compteront plus pour le Ranked.", ephemeral=True)
 
 @bot.tree.command(name="sync", description="Resynchronise les commandes slash")
