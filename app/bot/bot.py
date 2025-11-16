@@ -1,16 +1,3 @@
-# infected_ranked_refactor.py
-# Discord.py 2.x
-# Requiert: python-dotenv
-#
-# .env:
-# DISCORD_TOKEN=xxxxx
-
-import psycopg2
-from psycopg2.extras import DictCursor
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-
 from __future__ import annotations
 
 import logging
@@ -19,6 +6,9 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
+
+import psycopg2
+from psycopg2.extras import DictCursor
 
 import discord
 from discord import app_commands
@@ -37,10 +27,8 @@ log = logging.getLogger("ranked_infected")
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
 
 DB_PATH = "infected_ranked.db"
 
@@ -270,7 +258,7 @@ def upsert_player(discord_id: int, minecraft_name: str) -> Tuple[bool, str]:
         return False, "existe"
 
 def update_player(
-    c: sqlite3.Cursor,
+    c,
     discord_id: int,
     *,
     mmr_change: int = 0,
@@ -566,15 +554,12 @@ async def finalize_match(
         c.execute("SELECT discord_id, minecraft_name, active_ranked, mmr FROM players")
         name_to_data = {name: (did, active, mmr) for (did, name, active, mmr) in c.fetchall()}
 
-        # Créer le match
+        # Créer le match et récupérer son ID (Postgres)
         c.execute(
-            "INSERT INTO matches (date, winner) VALUES (%s, %s)",
+            "INSERT INTO matches (date, winner) VALUES (%s, %s) RETURNING match_id",
             (datetime.now(timezone.utc).isoformat(), winner)
-            )
-        match_id = c.lastrowid if hasattr(C, "lastrowid") else None
-        if match_id is None:
-            c.execute("SELECT MAX(match_id) AS mid FROM matches")
-            match_id = c.fetchone()["mid#]"]")
+        )
+        match_id = c.fetchone()[0]
 
         lines = []
         for name in players:
