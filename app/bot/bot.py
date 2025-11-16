@@ -41,10 +41,11 @@ DB_PATH = "infected_ranked.db"
 # —— Rangs par MMR (⚠️ logique conservée telle quelle)
 RANKS: List[Tuple[int, str]] = [
     (2500, "🔥 Alpha-Z"),
-    (2000, "🧌 Mutant"),
-    (1500, "🧟 Zombie"),
-    (1000, "🪦 Survivant"),
-    (-10**9, "🌿 Novice"),  # fallback
+    (2000, "💀 Apocalypse"),
+    (1500, "🧌 Mutant"),
+    (1000, "🧟 Zombie"),
+    (0,    "🪦 Survivant"),
+    (-10**9, "🌿 Réfugié"),  # fallback RP si jamais
 ]
 
 def get_rank(mmr: int) -> str:
@@ -822,38 +823,60 @@ async def ensure_or_update_message(
         log.error(f"[ensure_or_update_message] Échec d’envoi dans #{channel.name}: {e}")
 
 def build_manual_embed() -> discord.Embed:
-    # >>> METS ICI LA VERSION QUE TU VEUX AFFICHER <<<
     return discord.Embed(
-        title="📖 Manuel de Survie",
+        title="📖 Manuel de Survie — Edition Compétitive",
         description=(
-            "Ta survie dépend de ces ordres :\n\n"
-            "🧩 `/register [Pseudo Minecraft]` → enregistre ton identifiant pour participer.\n"
-            "🟢 `/ranked_on` → rejoins le système Ranked.\n"
-            "🔴 `/ranked_off` → quitte le Ranked.\n"
-            "📊 `/rank` → consulte ton rang et ton MMR.\n\n"
+            "Bienvenue dans le mode **Ranked Infecté**.\n"
+            "Ici, chaque action influence ton **MMR**, ton **rang** et ta **réputation compétitive**.\n"
+            "Prépare-toi. Joue propre. Progresse.\n\n"
+
             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "### ⚖️ RÈGLES OFFICIELLES — Ranked (Projet Z.E.N.A.)\n"
-            "**1) Accès & Identité**\n"
-            "• `/register [Pseudo]` obligatoire.\n"
-            "• Active/désactive via `/ranked_on` / `/ranked_off`.\n"
-            "• Multi-comptes / identités falsifiées → exclusion.\n\n"
-            "**2) Conduite en match**\n"
-            "• Fair-play : pas d’abandon volontaire / throw / AFK.\n"
-            "• Interdits : cheats, macros abusives, exploits de bug, ghosting, stream-sniping.\n"
-            "• Le staff Z.E.N.A. tranche en cas de litige.\n\n"
-            "**3) Déroulement & Rehost**\n"
-            "• Les stats se saisissent via `/matchend`.\n"
-            "• Déco < 2 min au début : **rehost possible** si la majorité l’accepte.\n"
-            "• Au-delà, le match continue sauf décision du staff.\n\n"
-            "**4) MMR & Classement**\n"
-            "• Le MMR varie selon rôle, kills, dégâts, scénario et taille de map.\n"
-            "• Abandon injustifié = **pénalité MMR**.\n"
-            "• Classement : `/leaderboard`.\n\n"
-            "**5) Sanctions & Preuves**\n"
-            "• Triche = résultats annulés + suspension Ranked.\n"
-            "• Toxicité grave = sanctions Discord + Ranked.\n"
-            "• Fournis **clips / logs / screens** au salon prévu.\n\n"
-            "_En participant, tu acceptes le protocole Ranked du Projet Z.E.N.A._ 🧬"
+            "### 🎮 Commandes Essentielles\n"
+            "• 🧩 `/register [pseudo]` — Crée ton profil compétitif.\n"
+            "• 🟢 `/ranked_on` — Active le mode classé.\n"
+            "• 🔴 `/ranked_off` — Mode scrim / warm-up (aucun MMR).\n"
+            "• 📊 `/rank` — Consulte ton rang.\n"
+            "• 🧾 `/stats` — Analyse tes performances.\n"
+            "• 🏆 `/leaderboard` — Classement officiel de la saison.\n\n"
+
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "### ⚔️ Ruleset Compétitif (Esport)\n"
+            "**1️⃣ Identité & Intégrité**\n"
+            "• Un seul compte par joueur.\n"
+            "• Pseudo Minecraft obligatoire.\n"
+            "• Doubles comptes / spoof → sanctions.\n\n"
+
+            "**2️⃣ Contraintes**\n"
+            "• Interdits : cheats, macros abusives, exploits.\n"
+            "• AFK, throw ou sabotage → pertes MMR.\n"
+            "• Respect obligatoire envers les autres joueurs.\n\n"
+
+            "**3️⃣ Déroulement des Matchs bêta**\n"
+            "• Fin de partie : stats enregistrées via `/matchend` pour la bêta.\n"
+            "• Déco < 2 min : **rehost possible** si la majorité l'accepte.\n"
+            "• Déco > 2 min : match **validé** (sauf décision staff).\n\n"
+
+            "**4️⃣ Système MMR (Compétitif) bêta**\n"
+            "• Calcul basé sur : rôle, kills, dégâts, scénarios, map.\n"
+            "• Abandon injustifié : **forte pénalité MMR**.\n"
+            "• Classement mis à jour instantanément.\n\n"
+
+            "**5️⃣ Discipline & Sanctions**\n"
+            "• Triche = ban classé + reset.\n"
+            "• Toxicité grave = sanctions Ranked.\n"
+            "• Preuves acceptées : clips, screens, logs.\n\n"
+
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "### 🎯 Structure des Rangs (Esport Tiers)\n"
+            "🪦 **Survivant (0–999 MMR)** — Tier 5 : apprentissage.\n\n"
+            "🧟 **Zombie (1000–1499 MMR)** — Tier 4 : joueurs réguliers.\n\n"
+            "🧌 **Mutant (1500–1999 MMR)** — Tier 3 : niveau avancé.\n\n"
+            "💀 **Apocalypse (2000–2499 MMR)** — Tier 2 : élite compétitive.\n\n"
+            "🔥 **Alpha-Z (2500+ MMR)** — Tier 1 : sommet du ladder.\n\n"
+
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "### 🧬 Mentalité Classée\n"
+            "Objectif final : monter dans le ladder, devenir référence, dominer la saison.\n"
         ),
         color=discord.Color.green()
     )
@@ -916,30 +939,8 @@ async def on_ready():
             embed=build_manual_embed(),
             signature="ZENAVIA_AUTGEN_MANUAL"
         )
-    # Hall
-    await ensure_or_update_message(
-        channel_hall,
-        config_key="hall_message_id",
-        embed=embed_hall_placeholder,
-        signature="ZENAVIA_AUTOGEN_HALL"
-    )
-    
-    # 4) Dossier d’évaluation — présentation des rangs
-    channel_rangs = find_channel(guild, "dossier", "evaluation")
-    if channel_rangs and not channel_rangs.last_message_id:
-        embed = discord.Embed(
-            title="🎖️ Les Rangs du Ranked Infecté",
-            description="Voici ton chemin de survie... ou de damnation.",
-            color=discord.Color.gold()
-        )
-        embed.add_field(name="🪦 Survivant (0–999 MMR)", value="*Derniers humains, fragiles mais encore debout.*", inline=False)
-        embed.add_field(name="🧟 Zombie (1000–1499 MMR)", value="*La chair à canon de l’essaim, affamés et sans répit.*", inline=False)
-        embed.add_field(name="🧌 Mutant (1500–1999 MMR)", value="*La chair se déforme, l’esprit s’éteint : un nouvel être naît.*", inline=False)
-        embed.add_field(name="💀 Apocalypse (2000–2499 MMR)", value="*Incarnation de la fin, porteur du désespoir et du chaos.*", inline=False)
-        embed.add_field(name="🔥 Alpha-Z (2500+ MMR)", value="*Alpha et Omega, porteur du fléau originel.*", inline=False)
-        await channel_rangs.send(embed=embed)
 
-    # 5) Hall des Légendes — auto setup + auto update
+    # 4) Hall des Légendes — auto setup + auto update
     await setup_or_update_hall(guild)
 
     # 🔥 Messages RP automatiques (feu de camp + radio)
