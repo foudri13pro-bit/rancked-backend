@@ -36,7 +36,6 @@ def process_match(match_id: str):
             log.warning(f"Match {match_id} ignoré : endAt absent dans process_match.")
             return {"status": "error", "error": "match_not_finished"}
 
-        
         import json
 
         print("=== RAW MATCH FULL ===")
@@ -70,7 +69,6 @@ def process_match(match_id: str):
             log.info("Match déjà traité")
             return {"status": "already_processed"}
 
-        
         players_games = {}
 
         for p in parsed_match.get("players", []):
@@ -83,7 +81,9 @@ def process_match(match_id: str):
             if player_obj:
                 players_games[pid] = player_obj.games_played
             else:
-                players_games[pid] = 0# 4) calcul MMR
+                players_games[pid] = 0
+
+        # 4) calcul MMR
         mmr_results = calculate_match_mmr(parsed_match, players_games)
 
         # 5) sauvegarder le match
@@ -202,12 +202,13 @@ def process_match(match_id: str):
             "status": "processed",
             "match_id": match.id,
             "players_updated": players_updated,
+            "players_total": len(parsed_match.get("players", [])),
             "winner": parsed_match.get("winner"),
             "map_name": str(parsed_match.get("map_name")),
             "scenarios": parsed_match.get("scenarios_internal", []),
             "top_changes": top_changes[:5],
             "player_summaries": player_summaries[:10],
-            "duration": int(parsed_match.get("duration", 0) or 0),
+            "duration": int(parsed_match.get("duration", raw_match.get("durationSec", 0)) or 0),
         }
 
     except Exception as e:

@@ -397,6 +397,7 @@ async def send_match_report(guild: discord.Guild, match_data: dict):
     map_name = match_data.get("map_name", "Inconnue")
     scenarios = match_data.get("scenarios", [])
     players_updated = int(match_data.get("players_updated", 0) or 0)
+    players_total = int(match_data.get("players_total", players_updated) or players_updated)
     player_summaries = match_data.get("player_summaries", [])
     duration = int(match_data.get("duration", 0) or 0)
 
@@ -405,7 +406,7 @@ async def send_match_report(guild: discord.Guild, match_data: dict):
             return "Inconnue"
         minutes = seconds // 60
         secs = seconds % 60
-        return f"{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}m {secs:02d}s"
 
     def winner_label(value: str) -> str:
         if value == "humains":
@@ -435,7 +436,7 @@ async def send_match_report(guild: discord.Guild, match_data: dict):
         if value == "humains":
             return (
                 f"La résistance a tenu la zone malgré {scenario_text}. "
-                f"Le sujet prioritaire **{mvp_name}** a dépassé les seuils de rendement attendus."
+                f"Le sujet **{mvp_name}** a dépassé les seuils attendus."
             )
         if value == "zombies":
             return (
@@ -443,7 +444,7 @@ async def send_match_report(guild: discord.Guild, match_data: dict):
                 f"L’entité **{mvp_name}** a été identifiée comme facteur majeur de rupture."
             )
         return (
-            f"Les données du conflit sont incomplètes. "
+            f"Les données du conflit restent partielles. "
             f"Le protocole signale néanmoins **{mvp_name}** comme sujet notable."
         )
 
@@ -467,33 +468,40 @@ async def send_match_report(guild: discord.Guild, match_data: dict):
         title="☣️ ARCHIVES Z.E.N.A. — RAPPORT POST-MATCH",
         description=(
             "_Analyse terminée. Les données biométriques du conflit ont été archivées._\n"
-            "_Le protocole Z.E.N.A. publie ci-dessous le rapport de contamination._"
+            "_Le protocole Z.E.N.A. publie ci-dessous le rapport d’incident._"
         ),
         color=winner_color(winner_raw)
     )
 
-    embed.add_field(name="🗺️ Zone du conflit", value=f"**{map_name}**", inline=True)
+    # Bloc résumé match
+    embed.add_field(name="🗺️ Zone", value=f"**{map_name}**", inline=True)
     embed.add_field(name="🏆 Issue", value=f"**{result_text}**", inline=True)
-    embed.add_field(name="👥 Joueurs traités", value=f"**{players_updated}**", inline=True)
+    embed.add_field(name="⏱️ Durée", value=f"**{format_duration(duration)}**", inline=True)
 
-    embed.add_field(name="🎭 Scénarios actifs", value=f"**{scenario_text}**", inline=False)
+    embed.add_field(name="🎭 Scénarios", value=f"**{scenario_text}**", inline=False)
 
-    embed.add_field(name="⏱️ Durée de l'incident", value=f"**{format_duration(duration)}**", inline=True)
+    embed.add_field(name="👥 Joueurs", value=f"**{players_total}** total", inline=True)
+    embed.add_field(name="📊 Ranked pris en compte", value=f"**{players_updated}**", inline=True)
     embed.add_field(name="📜 Rapport", value=f"**#{match_id}**", inline=True)
-    embed.add_field(name="🕒 Archivage", value=f"**{date_text} UTC**", inline=True)
 
+    embed.add_field(name="🕒 Archivage", value=f"**{date_text} UTC**", inline=False)
+
+    # Bloc MVP plus lisible
     if mvp:
         embed.add_field(
             name="🌟 Sujet prioritaire détecté — MVP",
             value=(
                 f"**{mvp_name}** {mvp_role}\n"
-                f"📈 `{mvp_delta:+} MMR` • ⚔️ `{mvp_kills} kills` • "
-                f"☣️ `{mvp_infections} infections` • 💥 `{mvp_dmg} dmg` • "
-                f"⏳ `{mvp_survival}s survie`"
+                f"📈 **MMR** : `{mvp_delta:+}`\n"
+                f"⚔️ **Kills** : `{mvp_kills}`\n"
+                f"☣️ **Infections** : `{mvp_infections}`\n"
+                f"💥 **Dégâts** : `{mvp_dmg}`\n"
+                f"⏳ **Survie** : `{mvp_survival}s`"
             ),
             inline=False
         )
 
+    # Top joueurs plus lisible
     if player_summaries:
         ranking_lines = []
         for i, row in enumerate(player_summaries[:5], start=1):
@@ -503,15 +511,17 @@ async def send_match_report(guild: discord.Guild, match_data: dict):
             kills = int(row.get("kills", 0) or 0)
             infections = int(row.get("infections", 0) or 0)
             dmg = int(row.get("dmg", 0) or 0)
+            survival = int(row.get("survival_time", 0) or 0)
             icon = role_icon(row.get("role", "unknown"))
 
             ranking_lines.append(
-                f"{medal} {icon} **{name}** — `{delta:+} MMR` • ⚔️ {kills} • ☣️ {infections} • 💥 {dmg}"
+                f"{medal} {icon} **{name}**\n"
+                f"📈 `{delta:+} MMR` | ⚔️ `{kills}` | ☣️ `{infections}` | 💥 `{dmg}` | ⏳ `{survival}s`"
             )
 
         embed.add_field(
             name="🏅 Classement d’efficacité",
-            value="\n".join(ranking_lines),
+            value="\n\n".join(ranking_lines),
             inline=False
         )
     else:
