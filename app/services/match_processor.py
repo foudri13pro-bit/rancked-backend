@@ -32,7 +32,11 @@ def process_match(match_id: str):
 
         # 1) récupérer le match via l'API Zenavia
         raw_match = api.get_game_detail(int(match_id))
+        if not raw_match.get("endAt"):
+            log.warning(f"Match {match_id} ignoré : endAt absent dans process_match.")
+            return {"status": "error", "error": "match_not_finished"}
 
+        
         import json
 
         print("=== RAW MATCH FULL ===")

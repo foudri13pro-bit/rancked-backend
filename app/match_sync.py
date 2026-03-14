@@ -3,7 +3,7 @@ import logging
 import requests
 
 from sqlalchemy import Column, Integer, DateTime
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.core.database import SessionLocal, Base, engine
 from app.models.player import Player
@@ -12,6 +12,9 @@ from app.services.match_processor import process_match
 
 log = logging.getLogger("match_sync")
 api = ZenaviaAPI()
+
+# Délai de sécurité après endAt avant traitement
+FINALIZE_DELAY_SECONDS = 60
 
 
 class ProcessedGame(Base):
@@ -23,6 +26,21 @@ class ProcessedGame(Base):
 
 
 Base.metadata.create_all(bind=engine)
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def parse_api_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+
+    try:
+        # Gère le format "2026-03-10T21:56:20Z"
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 def get_ranked_players():
@@ -105,6 +123,36 @@ def unreserve_game(game_id: int):
         db.close()
 
 
+def is_match_ready_for_processing(game_id: int) -> bool:
+    """
+    Vérifie que le match est réellement terminé ET
+    qu'un délai de sécurité est passé depuis endAt.
+    """
+    try:
+        raw_match = api.get_game_detail(game_id)
+    except Exception as e:
+        log.error(f"Impossible de récupérer le détail du match {game_id} : {e}")
+        return False
+
+    end_at_raw = raw_match.get("endAt")
+    end_at_dt = parse_api_datetime(end_at_raw)
+
+    if not end_at_dt:
+        log.info(f"Match {game_id} ignoré : endAt absent, partie probablement encore en cours.")
+        return False
+
+    elapsed = (utc_now() - end_at_dt).total_seconds()
+
+    if elapsed < FINALIZE_DELAY_SECONDS:
+        log.info(
+            f"Match {game_id} terminé mais encore en délai de sécurité "
+            f"({int(elapsed)}/{FINALIZE_DELAY_SECONDS}s)."
+        )
+        return False
+
+    return True
+
+
 def check_new_games_for_player(player: Player):
     if not player.minecraft_name:
         log.warning(f"Joueur ignoré car minecraft_name manquant : id={player.id}")
@@ -117,11 +165,19 @@ def check_new_games_for_player(player: Player):
         if not game_id:
             continue
 
-        # Réservation atomique simple
+        if is_game_processed(game_id):
+            continue
+
+        # IMPORTANT :
+        # on ne réserve / traite QUE si le match est vraiment prêt
+        if not is_match_ready_for_processing(game_id):
+            continue
+
+        # Réservation atomique seulement après confirmation de fin
         if not try_reserve_game(game_id):
             continue
 
-        log.info(f"Nouvelle game réservée : {game_id} pour {player.minecraft_name}")
+        log.info(f"Nouvelle game confirmée et réservée : {game_id} pour {player.minecraft_name}")
 
         result = None
 
@@ -191,4 +247,4 @@ if __name__ == "__main__":
         except Exception as e:
             log.error(f"Erreur globale pendant la surveillance : {e}")
 
-        time.sleep(30)
+        time.sleep(60)
