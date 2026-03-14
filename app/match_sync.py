@@ -14,7 +14,10 @@ log = logging.getLogger("match_sync")
 api = ZenaviaAPI()
 
 # Délai de sécurité après endAt avant traitement
-FINALIZE_DELAY_SECONDS = 60
+FINALIZE_DELAY_SECONDS = 20
+pending_matches = {}
+REQUIRED_STABLE_POLLS = 2
+
 
 
 class ProcessedGame(Base):
@@ -41,6 +44,95 @@ def parse_api_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def build_match_snapshot(raw_match: dict) -> dict:
+    players = raw_match.get("players", [])
+
+    compact_players = []
+    for p in players:
+        compact_players.append((
+            str(p.get("playerId") or p.get("id") or p.get("pseudo") or "unknown"),
+            int(p.get("kills", 0) or 0),
+            int(p.get("damage", 0) or 0),
+            int(p.get("infectedCount", 0) or 0),
+            int(p.get("survivalTime", 0) or 0),
+        ))
+
+    compact_players.sort()
+
+    return {
+        "endAt": raw_match.get("endAt"),
+        "durationSec": int(raw_match.get("durationSec", 0) or 0),
+        "winner": raw_match.get("winner"),
+        "players": compact_players,
+    }
+
+
+def is_match_ready_for_processing(game_id: int) -> bool:
+    """
+    Le match n'est prêt que si :
+    - endAt existe
+    - ET les stats sont stables sur plusieurs polls
+    """
+    try:
+        raw_match = api.get_game_detail(game_id)
+    except Exception as e:
+        log.error(f"Impossible de récupérer le détail du match {game_id} : {e}")
+        return False
+
+    end_at_raw = raw_match.get("endAt")
+    end_at_dt = parse_api_datetime(end_at_raw)
+
+    log.info(
+        f"Vérification match {game_id} : "
+        f"startAt={raw_match.get('startAt')} endAt={raw_match.get('endAt')} "
+        f"durationSec={raw_match.get('durationSec')} mapId={raw_match.get('mapId')}"
+    )
+
+    if not end_at_dt:
+        pending_matches.pop(game_id, None)
+        log.info(f"Match {game_id} ignoré : endAt absent, partie probablement encore en cours.")
+        return False
+
+    elapsed = (utc_now() - end_at_dt).total_seconds()
+    if elapsed < FINALIZE_DELAY_SECONDS:
+        log.info(
+            f"Match {game_id} terminé mais encore en délai de sécurité "
+            f"({int(elapsed)}/{FINALIZE_DELAY_SECONDS}s)."
+        )
+        return False
+
+    new_snapshot = build_match_snapshot(raw_match)
+
+    if game_id not in pending_matches:
+        pending_matches[game_id] = {
+            "snapshot": new_snapshot,
+            "stable_count": 0,
+        }
+        log.info(f"Match {game_id} en attente de stabilité des stats (1er snapshot).")
+        return False
+
+    old_snapshot = pending_matches[game_id]["snapshot"]
+
+    if new_snapshot == old_snapshot:
+        pending_matches[game_id]["stable_count"] += 1
+        log.info(
+            f"Match {game_id} snapshot stable "
+            f"({pending_matches[game_id]['stable_count']}/{REQUIRED_STABLE_POLLS})."
+        )
+    else:
+        pending_matches[game_id]["snapshot"] = new_snapshot
+        pending_matches[game_id]["stable_count"] = 0
+        log.info(f"Match {game_id} snapshot modifié, attente prolongée.")
+        return False
+
+    if pending_matches[game_id]["stable_count"] < REQUIRED_STABLE_POLLS:
+        return False
+
+    pending_matches.pop(game_id, None)
+    log.info(f"Match {game_id} confirmé : stats stables, prêt pour traitement.")
+    return True
 
 
 def get_ranked_players():
