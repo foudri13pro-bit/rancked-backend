@@ -1,12 +1,19 @@
+from app.core.database import Base, engine
+from app.api.leaderboard import router as leaderboard_router
+from app.models import Player, Match, MMRHistory
+from app.api.match import router as match_router
+
 import os
 import logging
 import asyncio
 
 from fastapi import FastAPI
+
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-
-from app.bot.bot import bot  # ← ton RankedBot défini dans bot.py
+from fastapi import HTTPException
+from pydantic import BaseModel
+from app.bot.bot import bot, send_match_report, update_hall
 
 # =========================
 #          LOGGING
@@ -24,6 +31,8 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 #        FASTAPI APP
 # =========================
 app = FastAPI(title="Ranked Infected Backend")
+app.include_router(match_router)
+app.include_router(leaderboard_router)
 
 # (optionnel, mais pratique si plus tard tu exposes des routes)
 app.add_middleware(
@@ -34,6 +43,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+Base.metadata.create_all(bind=engine)
 
 @app.get("/")
 async def root():
@@ -47,7 +57,36 @@ async def root():
 async def ping():
     return {"pong": True}
 
+class MatchReportPayload(BaseModel):
+    status: str
+    match_id: str | int | None = None
+    players_updated: int = 0
+    winner: str | None = None
+    map_name: str | None = None
+    scenarios: list[str] = []
+    top_changes: list[dict] = []
+    player_summaries: list[dict] = []
+    duration: int = 0
 
+
+@app.post("/announce_match_report")
+async def announce_match_report(payload: MatchReportPayload):
+    try:
+        if not bot.guilds:
+            raise HTTPException(status_code=503, detail="Bot Discord non connecté à un serveur.")
+
+        guild = bot.guilds[0]
+
+        await send_match_report(guild, payload.model_dump())
+        await update_hall(guild)
+
+        return {"status": "sent"}
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 # =========================
 #     DISCORD BOT LIFECYCLE
 # =========================
