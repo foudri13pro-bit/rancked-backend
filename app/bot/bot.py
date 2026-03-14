@@ -831,10 +831,8 @@ async def register(interaction: discord.Interaction, minecraft_name: str):
             )
             return
 
-        data = zenavia_profile.get("data", {})
-
-        zenavia_player_id = str(data.get("id")) if data.get("id") is not None else None
-        returned_pseudo = data.get("pseudo") or minecraft_name
+        zenavia_player_id = str(zenavia_profile.get("id")) if zenavia_profile.get("id") is not None else None
+        returned_pseudo = zenavia_profile.get("pseudo") or minecraft_name
 
         if not zenavia_player_id or not returned_pseudo:
             await interaction.response.send_message(
