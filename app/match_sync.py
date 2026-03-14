@@ -187,6 +187,13 @@ def is_match_ready_for_processing(game_id: int) -> bool:
         f"mapId={raw_match.get('mapId')}"
     )
 
+    duration = int(raw_match.get("durationSec", 0) or 0)
+
+    if duration < 100:
+        pending_matches.pop(game_id, None)
+        log.info(f"Match {game_id} ignoré : durée trop faible ({duration}s).")
+        return False
+
     # Si pas de endAt, match encore en cours.
     if not end_at_dt:
         pending_matches.pop(game_id, None)
@@ -234,12 +241,13 @@ def is_match_ready_for_processing(game_id: int) -> bool:
     return True
 
 
-def check_new_games_for_player(player: Player):
+
+def check_new_games_for_player(player: Player) -> bool:
     if not player.minecraft_name:
         log.warning(f"Joueur ignoré car minecraft_name manquant : id={player.id}")
-        return
+        return False
 
-    games = api.get_player_games(player.minecraft_name, page=0, size=10)
+    games = api.get_player_games(player.minecraft_name, page=0, size=1)
 
     for game in games:
         game_id = game.get("gameId")
@@ -279,22 +287,30 @@ def check_new_games_for_player(player: Player):
                         f"Erreur annonce Discord pour match {game_id} : {announce_error}"
                     )
 
+                return True
+
             elif result.get("status") == "already_processed":
                 log.info(f"Game {game_id} déjà traitée côté matches.")
+                return True
 
             elif result.get("status") == "error":
                 log.error(f"Erreur logique process_match({game_id}) : {result}")
                 unreserve_game(game_id)
+                return False
 
             else:
                 log.warning(
                     f"Statut inattendu pour process_match({game_id}) : {result}"
                 )
                 unreserve_game(game_id)
+                return False
 
         except Exception as e:
             log.error(f"Erreur process_match({game_id}) : {e}")
             unreserve_game(game_id)
+            return False
+
+    return False
 
 
 def check_all_ranked_players():
@@ -308,7 +324,10 @@ def check_all_ranked_players():
 
     for player in players:
         try:
-            check_new_games_for_player(player)
+            processed = check_new_games_for_player(player)
+            if processed:
+                log.info("Un match a été traité sur ce cycle, arrêt du scan jusqu'au prochain poll.")
+                return
         except Exception as e:
             log.error(
                 f"Erreur pendant la vérification de {player.minecraft_name}: {e}"
