@@ -258,8 +258,158 @@ class RankedBot(commands.Bot):
         self.synced = False
 
     async def setup_hook(self) -> None:
-        pass
+        self.add_view(HallPaginationView())
 
+
+# =========================
+#     HALL PAGINATION
+# =========================
+HALL_PAGE_SIZE = 10
+hall_pages_cache: dict[int, list[discord.Embed]] = {}
+
+
+def _hall_flair(rank_label: str) -> str:
+    if "Alpha-Z" in rank_label:
+        return "🔥 Porteur du fléau originel"
+    if "Apocalypse" in rank_label:
+        return "💀 Incarnation du chaos"
+    if "Mutant" in rank_label:
+        return "🧌 Déformation de la chair"
+    if "Zombie" in rank_label:
+        return "🧟 Chair affamée"
+    return "🌿 Survivant fragile"
+
+
+def build_hall_embeds(rows: list[Player], page_size: int = HALL_PAGE_SIZE) -> list[discord.Embed]:
+    if not rows:
+        embed = discord.Embed(
+            title="🏛️ Hall des Légendes",
+            description="*Aucun nom n’a encore été gravé dans la pierre...*",
+            color=discord.Color.dark_grey()
+        )
+        embed.set_footer(text="Page 1/1 • 0 joueurs classés")
+        return [embed]
+
+    embeds = []
+    total_players = len(rows)
+    total_pages = (total_players + page_size - 1) // page_size
+    medals = ["👑", "🥈", "🥉"]
+
+    for page_index in range(total_pages):
+        start = page_index * page_size
+        end = start + page_size
+        page_rows = rows[start:end]
+
+        embed = discord.Embed(
+            title="━━━━━━━━━ 🏛️ HALL DES LÉGENDES ━━━━━━━━━",
+            description="⚔️ Classement vivant du camp",
+            color=discord.Color.gold()
+        )
+
+        for local_index, player in enumerate(page_rows, start=1):
+            global_rank = start + local_index
+            mmr = player.current_mmr or 1000
+            rank_label = get_rank(mmr)
+            flair = _hall_flair(rank_label)
+
+            display_name = (
+                player.minecraft_name
+                or (f"Zenavia#{player.zenavia_player_id}" if player.zenavia_player_id else f"player_{player.id}")
+            )
+
+            prefix = medals[global_rank - 1] if global_rank <= 3 else f"#{global_rank}"
+
+            if global_rank <= 3:
+                embed.add_field(
+                    name=f"{prefix} {display_name} — {rank_label}",
+                    value=f"{flair}\n🏆 {mmr} MMR",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name=f"{prefix} {display_name}",
+                    value=f"{rank_label} | {mmr} MMR",
+                    inline=False
+                )
+
+        embed.set_footer(
+            text=f"Page {page_index + 1}/{total_pages} • {total_players} joueurs classés"
+        )
+        embeds.append(embed)
+
+    return embeds
+
+
+class HallPaginationView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    def _get_page_info(self, guild_id: int, message_id: int) -> tuple[list[discord.Embed], int]:
+        embeds = hall_pages_cache.get(message_id, [])
+        if not embeds:
+            fallback = discord.Embed(
+                title="🏛️ Hall des Légendes",
+                description="Le classement n’est pas encore prêt ou a été réinitialisé.",
+                color=discord.Color.dark_grey()
+            )
+            fallback.set_footer(text="Page 1/1")
+            return [fallback], 0
+
+        current_page = 0
+        return embeds, current_page
+
+    def _extract_page_from_footer(self, embed: discord.Embed) -> int:
+        if not embed.footer or not embed.footer.text:
+            return 0
+
+        text = embed.footer.text
+        # format attendu : "Page X/Y • ..."
+        if "Page " not in text or "/" not in text:
+            return 0
+
+        try:
+            page_part = text.split("Page ", 1)[1].split("•", 1)[0].strip()
+            current = int(page_part.split("/")[0].strip())
+            return max(current - 1, 0)
+        except Exception:
+            return 0
+
+    async def _change_page(self, interaction: discord.Interaction, direction: int):
+        message = interaction.message
+        if not message:
+            await interaction.response.send_message("❌ Message introuvable.", ephemeral=True)
+            return
+
+        embeds = hall_pages_cache.get(message.id)
+        if not embeds:
+            await interaction.response.send_message(
+                "⚠️ Le cache du Hall a été perdu. Réactualise le Hall avec une mise à jour du classement.",
+                ephemeral=True
+            )
+            return
+
+        current_page = 0
+        if message.embeds:
+            current_page = self._extract_page_from_footer(message.embeds[0])
+
+        new_page = current_page + direction
+        if new_page < 0:
+            new_page = 0
+        if new_page >= len(embeds):
+            new_page = len(embeds) - 1
+
+        await interaction.response.edit_message(
+            embed=embeds[new_page],
+            view=self
+        )
+
+    @discord.ui.button(label="⬅️", style=discord.ButtonStyle.secondary, custom_id="hall_prev_page")
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._change_page(interaction, -1)
+
+    @discord.ui.button(label="➡️", style=discord.ButtonStyle.secondary, custom_id="hall_next_page")
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._change_page(interaction, 1)
 
 bot = RankedBot()
 
@@ -316,64 +466,19 @@ async def update_hall(guild: discord.Guild):
     try:
         rows = (
             db.query(Player)
+            .filter(Player.active_ranked == True)
             .order_by(Player.current_mmr.desc())
-            .limit(10)
             .all()
         )
 
-        if not rows:
-            embed = discord.Embed(
-                title="🏛️ Hall des Légendes",
-                description="*Aucun nom n’a encore été gravé dans la pierre...*",
-                color=discord.Color.dark_grey()
-            )
-        else:
-            embed = discord.Embed(
-                title="━━━━━━━━━ 🏛️ HALL DES LÉGENDES ━━━━━━━━━",
-                description="⚔️ Classement vivant du camp",
-                color=discord.Color.gold()
-            )
+        embeds = build_hall_embeds(rows, page_size=HALL_PAGE_SIZE)
+        hall_pages_cache[msg.id] = embeds
 
-            medals = ["👑", "🥈", "🥉"]
-
-            for i, player in enumerate(rows, start=1):
-                mmr = player.current_mmr or 1000
-                rank_label = get_rank(mmr)
-                prefix = medals[i - 1] if i <= 3 else f"#{i}"
-
-                display_name = (
-                    player.minecraft_name
-                    or (f"Zenavia#{player.zenavia_player_id}" if player.zenavia_player_id else f"player_{player.id}")
-                )
-
-                if "Alpha-Z" in rank_label:
-                    flair = "🔥 Porteur du fléau originel"
-                elif "Apocalypse" in rank_label:
-                    flair = "💀 Incarnation du chaos"
-                elif "Mutant" in rank_label:
-                    flair = "🧌 Déformation de la chair"
-                elif "Zombie" in rank_label:
-                    flair = "🧟 Chair affamée"
-                else:
-                    flair = "🌿 Survivant fragile"
-
-                if i <= 3:
-                    embed.add_field(
-                        name=f"{prefix} {display_name} — {rank_label}",
-                        value=f"{flair}\n🏆 {mmr} MMR",
-                        inline=False
-                    )
-                else:
-                    embed.add_field(
-                        name=f"{prefix} {display_name}",
-                        value=f"{rank_label} | {mmr} MMR",
-                        inline=False
-                    )
-
-            embed.set_footer(text="Les noms effacés disparaissent dans l’oubli...")
-
-        await msg.edit(embed=embed)
-        log.info("[Hall] Hall des Légendes mis à jour.")
+        await msg.edit(
+            embed=embeds[0],
+            view=HallPaginationView()
+        )
+        log.info("[Hall] Hall des Légendes paginé mis à jour.")
 
     except Exception as e:
         log.warning(f"[Hall] Erreur update: {e}")

@@ -167,6 +167,9 @@ def process_match(match_id: str):
             if not player_obj:
                 continue
 
+            if not player_obj.active_ranked:
+                continue
+
             display_name = f"Player {player_id}"
             if player_obj.minecraft_name:
                 display_name = player_obj.minecraft_name
